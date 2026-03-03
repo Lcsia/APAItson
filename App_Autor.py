@@ -307,7 +307,7 @@ if 'ids_confirmados' in st.session_state and not st.session_state.get('mostrar_t
         [['#28a745', '#dc3545'], ['#28a745', '#dc3545'], ['#2F4F4F','#FFD700']], [res_t['n'], res_t['citas'], res_t['n']]):
         
         fig = go.Figure(data=[go.Pie(labels=lbl, values=val, hole=.6, marker_colors=clr)])
-        fig.update_layout(annotations=[dict(text=f'Total<br>{tot}', x=0.5, y=0.5, font_size=20, showarrow=False)], height=250, margin=dict(t=30,b=0,l=0,r=0))
+        fig.update_layout(annotations=[dict(text=f'Total<br>{tot}', x=0.5, y=0.5, font_size=20, showarrow=False)], height=200, margin=dict(t=30,b=0,l=0,r=0))
         col.subheader(tit); col.plotly_chart(fig, use_container_width=True)
 
     # Liderazgo
@@ -323,7 +323,7 @@ if 'ids_confirmados' in st.session_state and not st.session_state.get('mostrar_t
     ):
         v3 = max(0, n - v1 - v2)
         fig = go.Figure(data=[go.Pie(labels=lbl, values=[v1, v2, v3], hole=.6, marker_colors=clr)])
-        fig.update_layout(annotations=[dict(text=f'Total<br>{n}', x=0.5, y=0.5, font_size=20, showarrow=False)], height=250, margin=dict(t=30,b=0,l=0,r=0))
+        fig.update_layout(annotations=[dict(text=f'Total<br>{n}', x=0.5, y=0.5, font_size=20, showarrow=False)], height=200, margin=dict(t=30,b=0,l=0,r=0))
         col.subheader(tit); col.plotly_chart(fig, use_container_width=True)
 
     # Áreas y Keywordsst.write(" ")
@@ -413,6 +413,7 @@ if 'ids_confirmados' in st.session_state and not st.session_state.get('mostrar_t
     )
 
 st.markdown("<style>table { width: 100%; border-bottom: 1px solid #f0f2f6; font-size: 1.1rem; }</style>", unsafe_allow_html=True)
+
 
 
 
