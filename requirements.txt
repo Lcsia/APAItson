@@ -1,4 +1,6 @@
 streamlit
-pandas
 plotly
+pandas
+numpy
 requests
+thefuzz
