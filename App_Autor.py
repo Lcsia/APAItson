@@ -5,6 +5,7 @@ import requests
 import unicodedata
 import re
 from collections import Counter
+from thefuzz import fuzz
 import streamlit.components.v1 as components
 
 # ==========================================
@@ -178,7 +179,7 @@ def analizar_grupo(articulos, lista_ids_autor):
             '1st': es_p,
             'Corr.': es_c,
             'High-Qual': "X" if es_alta_calidad else "",
-            'Ext_Colab_%': round(p_ext, 1), # Se queda solo el porcentaje numérico
+            'Ext_Colab_%': round(p_ext, 2), # Se queda solo el porcentaje numérico
             'Author_Cost': author_cost,
             'DOI': (obra.get('doi') or "").replace("https://doi.org/", "")
         })
@@ -195,6 +196,31 @@ def analizar_grupo(articulos, lista_ids_autor):
         'paper_list': registros_paperdata
     }
 
+def eliminar_duplicados_fuzzy(articulos, umbral=90):
+    articulos_unicos = []
+    titulos_procesados = []
+
+    for art in articulos:
+        titulo_actual = art.get('display_name') or ""
+        if not titulo_actual:
+            continue
+        
+        # Normalizamos un poco para la comparación
+        titulo_norm = titulo_actual.lower().strip()
+        
+        # Comparamos con los que ya aceptamos
+        es_duplicado = False
+        for t_registrado in titulos_procesados:
+            # ratio() da un puntaje de 0 a 100 de similitud
+            if fuzz.ratio(titulo_norm, t_registrado) > umbral:
+                es_duplicado = True
+                break
+        
+        if not es_duplicado:
+            articulos_unicos.append(art)
+            titulos_procesados.append(titulo_norm)
+            
+    return articulos_unicos
 # ==========================================
 # 3. INTERFAZ: BÚSQUEDA
 # ==========================================
@@ -207,7 +233,7 @@ with col_tit:
     st.markdown('<p style="font-size: 18px; color: #5E5E5E; font-style: italic;">By Social Behavior and Artificial Intelligence Laboratory & Sonora Institute of Technology </p>', unsafe_allow_html=True)
 
 nombre_buscar = st.text_input("Researcher Name:", value="Laurent Avila Chauvet")
-solo_reciente = st.toggle("Recent Impact Analysis (2020-2026)", value=True)
+solo_reciente = st.toggle("Recent Impact Analysis (2020-2026)", value=False)
 
 download_placeholder = st.empty()
 
@@ -255,21 +281,94 @@ if 'ids_confirmados' in st.session_state and not st.session_state.get('mostrar_t
             r = requests.get(f"https://api.openalex.org/works?filter=author.id:{ida},type:article&per_page=200", headers=headers).json()
             obras_sucias.extend(r.get('results', []))
 
-        obras = []
+        # ========================================================
+        # 1. FILTRO DE PREPRINTS Y ABSTRACTS (SOLO EN JOURNAL)
+        # ========================================================
+        obras_sin_preprints = []
+        PREPRINT_SERVERS = ["arxiv", "biorxiv", "medrxiv", "ssrn", "researchsquare", 
+                            "preprints.org", "chemrxiv", "psyarxiv", "socarxiv", "zenodo"]
+        
+        # Palabras clave para identificar fuentes que no son artículos completos
+        CONFERENCE_KEYWORDS = ["meeting", "abstract", "conference", "supplement", "workshop"]
+        
         for o in obras_sucias:
             source = (o.get('primary_location', {}) or {}).get('source') or {}
             j_name = (source.get('display_name') or "").lower()
             s_type = source.get('type') or ""
             
-            if s_type != 'repository' and not any(p in j_name for p in PREPRINT_SERVERS):
-                obras.append(o)
+            # Verificamos si es un preprint
+            es_preprint = any(p in j_name for p in PREPRINT_SERVERS)
+            
+            # --- FILTRO EXCLUSIVO DE JOURNAL ---
+            # Solo buscamos las palabras clave en el nombre de la revista
+            es_conferencia = any(ck in j_name for ck in CONFERENCE_KEYWORDS)
+            
+            # Filtro de salida: no es repositorio, ni preprint, ni revista de conferencia
+            if s_type != 'repository' and not es_preprint and not es_conferencia:
+                obras_sin_preprints.append(o)
 
-        art_base = [o for o in obras if not solo_reciente or (anio_inicio_auto <= o.get('publication_year', 0) <= anio_actual)]
+        # ========================================================
+        # 2. FILTRO DE DUPLICADOS (DENSIDAD LATINA + TOKEN FUZZY)
+        # ========================================================
+        obras_unicas = []
+        dois_vistos = set()
+        titulos_limpios_vistos = [] 
+
+        def limpieza_radical(texto):
+            if not texto: return "", 0
+            t_orig = texto.lower()
+            # Quitar acentos y normalizar a ASCII
+            t_limpio = unicodedata.normalize('NFKD', t_orig).encode('ascii', 'ignore').decode('ascii')
+            # Dejar solo letras y espacios
+            t_solo_letras = re.sub(r'[^a-z\s]', '', t_limpio)
+            resultado = " ".join(t_solo_letras.split())
+            
+            # Calculamos cuánta "letra normal" quedó vs el original
+            densidad = len(resultado) / len(t_orig) if len(t_orig) > 0 else 0
+            return resultado, densidad
+
+        for o in obras_sin_preprints:
+            doi = (o.get('doi') or "").lower().strip().replace("https://doi.org/", "")
+            titulo_original = o.get('display_name') or ""
+            
+            # --- PASO A: Limpieza y Check de Idioma (Japonés/Chino) ---
+            titulo_c, densidad = limpieza_radical(titulo_original)
+            
+            # Si el título es mayormente japonés (baja densidad latina) o muy corto, saltar
+            if densidad < 0.5 or len(titulo_c) < 10:
+                continue
+
+            # --- PASO B: Regla de DOI ---
+            if doi and doi in dois_vistos:
+                continue
+            
+            # --- PASO C: Regla Fuzzy (Token Set Ratio para traducciones) ---
+            es_duplicado = False
+            for t_registrado in titulos_limpios_vistos:
+                # El token_set_ratio detecta "Calibración" e "In situ Calibration" como iguales
+                if fuzz.token_set_ratio(titulo_c, t_registrado) > 92:
+                    es_duplicado = True
+                    break
+            
+            if not es_duplicado:
+                # Parche de seguridad para navegación segura en el análisis
+                if not o.get('primary_location'): o['primary_location'] = {}
+                if not o['primary_location'].get('source'): o['primary_location']['source'] = {}
+
+                obras_unicas.append(o)
+                titulos_limpios_vistos.append(titulo_c)
+                if doi: dois_vistos.add(doi)
+
+        # 3. FILTRO DE AÑOS (Sobre la lista ya limpia)
+        art_base = [o for o in obras_unicas if not solo_reciente or (anio_inicio_auto <= o.get('publication_year', 0) <= anio_actual)]
         
         if not art_base:
-            st.warning("No articles found for the selected period (excluding preprints).")
+            st.warning("No articles found for the selected period.")
             st.stop()
 
+        # ========================================================
+        # 4. AHORA SÍ: EJECUTAR ANÁLISIS (Con datos limpios)
+        # ========================================================
         res_t = analizar_grupo(art_base, ids_autor)
         
         art_solo_calidad = [o for o in art_base if any(p['Title'] == o['display_name'] and p['High-Qual'] == "X" for p in res_t['paper_list'])]
@@ -401,9 +500,9 @@ if 'ids_confirmados' in st.session_state and not st.session_state.get('mostrar_t
             "Citations": st.column_config.NumberColumn("Cites", width="small"),
             "1st": st.column_config.TextColumn("1st", width="small"),
             "Corr.": st.column_config.TextColumn("Corr.", width="small"),
-            "High-Qual": st.column_config.TextColumn("HQ", width="small"),
+            "High-Qual": st.column_config.TextColumn("H.Q.", width="small"),
             "Ext_Colab_%": st.column_config.NumberColumn(
-                "Inter-inst. Index",
+                "Cross Colab.",
                 width="small",
                 format="%.0f%%"
             ),
@@ -413,7 +512,6 @@ if 'ids_confirmados' in st.session_state and not st.session_state.get('mostrar_t
     )
 
 st.markdown("<style>table { width: 100%; border-bottom: 1px solid #f0f2f6; font-size: 1.1rem; }</style>", unsafe_allow_html=True)
-
 
 
 
